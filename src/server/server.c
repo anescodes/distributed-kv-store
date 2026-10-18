@@ -1,47 +1,37 @@
 #include <stdio.h>
-#include <stdlib.h>
-
 #include "network.h"
+#include "server.h"
 
-#define PORT 8080
-
-int main(void)
+int start_server_module(int port)
 {
-    // Initialize the server
-    int server_fd = init_server(PORT);
-
-    if (server_fd < 0) {
-        return EXIT_FAILURE;
+    printf("[Server Module] Initializing server on port %d...\n", port);
+    int fd = network_init_server(port);
+    if (fd >= 0) {
+        printf("[Server Module] Listening on port %d\n", port);
     }
+    return fd;
+}
 
-    // Wait for a client
-    int client_fd = accept_client(server_fd);
-
-    if (client_fd < 0) {
-        network_close(server_fd);
-        return EXIT_FAILURE;
+int accept_peer_connection(int server_fd)
+{
+    int fd = network_accept_client(server_fd);
+    if (fd >= 0) {
+        printf("[Server Module] Peer connected successfully!\n");
     }
+    return fd;
+}
 
-    // Receive data from client
-    char buffer[1024];
+ssize_t server_receive_from_peer(int peer_fd, char *buf, size_t len)
+{
+    return network_recv(peer_fd, buf, len);
+}
 
-    int bytes_received = receive_data(
-        client_fd,
-        buffer,
-        sizeof(buffer)
-    );
+ssize_t server_send_to_peer(int peer_fd, const char *data, size_t len)
+{
+    return network_send(peer_fd, data, len);
+}
 
-    if (bytes_received < 0) {
-        network_close(client_fd);
-        network_close(server_fd);
-        return EXIT_FAILURE;
-    }
-
-    printf("Received: %s\n", buffer);
-
-    // Close connections
-    network_close(client_fd);
-    network_close(server_fd);
-
-    return EXIT_SUCCESS;
+void server_close(int fd)
+{
+    network_close(fd);
 }
