@@ -1,189 +1,134 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
+#include <errno.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include "network.h"
 
-// =========================
-// Server methods
-// =========================
-
-int init_server(int port)
+int network_init_server(int port)
 {
-    printf("Initializing server on port %d...\n", port);
-
-    // 1. Create socket
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-
-    if (server_fd < 0) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
         perror("socket failed");
         return -1;
     }
 
-    // Allow reuse of the address/port
     int opt = 1;
-
-    if (setsockopt(server_fd,
-                   SOL_SOCKET,
-                   SO_REUSEADDR,
-                   &opt,
-                   sizeof(opt)) < 0) {
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
         perror("setsockopt failed");
-        close(server_fd);
+        close(fd);
         return -1;
     }
 
-    // 2. Configure server address
-    struct sockaddr_in address;
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons((uint16_t)port);
 
-    memset(&address, 0, sizeof(address));
-
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(port);
-
-    // 3. Bind socket to IP + port
-    if (bind(server_fd,
-             (struct sockaddr *)&address,
-             sizeof(address)) < 0) {
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         perror("bind failed");
-        close(server_fd);
+        close(fd);
         return -1;
     }
 
-    // 4. Start listening
-    if (listen(server_fd, 10) < 0) {
+    if (listen(fd, 16) < 0) {
         perror("listen failed");
-        close(server_fd);
+        close(fd);
         return -1;
     }
-
-    printf("Server listening on port %d...\n", port);
-
-    return server_fd;
+    return fd;
 }
 
-
-int accept_client(int server_fd)
+int network_accept_client(int server_fd)
 {
-    // Accept a connection
+    int fd;
+    do {
+        fd = accept(server_fd, NULL, NULL);
+    } while (fd < 0 && errno == EINTR);
 
-    int client_fd = accept(server_fd, NULL, NULL);
-
-    if (client_fd < 0) {
+    if (fd < 0) {
         perror("accept failed");
         return -1;
     }
-
-    printf("Client connected!\n");
-
-    return client_fd;
+    return fd;
 }
 
-
-// =========================
-// Client methods
-// =========================
-
-int connect_to_server(const char *server_ip, int port)
+int network_connect(const char *ip, int port)
 {
-    // 1. Create socket
-    int client_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (ip == NULL) {
+        return -1;
+    }
 
-    if (client_fd < 0) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
         perror("socket failed");
         return -1;
     }
 
-    // 2. Configure server address
-    struct sockaddr_in server_address;
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
 
-    memset(&server_address, 0, sizeof(server_address));
-
-    server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(port);
-
-    // Convert IP string to binary form
-    if (inet_pton(AF_INET, server_ip, &server_address.sin_addr) <= 0) {
-        perror("invalid server IP");
-        close(client_fd);
+    if (inet_pton(AF_INET, ip, &addr.sin_addr) <= 0) {
+        fprintf(stderr, "invalid server IP: %s\n", ip);
+        close(fd);
         return -1;
     }
 
-    // 3. Connect to server
-    if (connect(client_fd,
-                (struct sockaddr *)&server_address,
-                sizeof(server_address)) < 0) {
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         perror("connect failed");
-        close(client_fd);
+        close(fd);
         return -1;
     }
-
-    printf("Connected to server %s:%d\n", server_ip, port);
-
-    return client_fd;
+    return fd;
 }
 
-
-// =========================
-// Data methods
-// =========================
-
-int send_data(int client_fd, const char *data, size_t data_len)
+ssize_t network_send(int fd, const char *data, size_t len)
 {
-    ssize_t bytes_sent = send(client_fd, data, data_len, 0);
-
-    if (bytes_sent < 0) {
-        perror("send failed");
+    if (fd < 0 || data == NULL) {
         return -1;
     }
 
-    return (int)bytes_sent;
+    size_t total = 0;
+    while (total < len) {
+        ssize_t n = send(fd, data + total, len - total, MSG_NOSIGNAL);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            perror("send failed");
+            return -1;
+        }
+        total += (size_t)n;
+    }
+    return (ssize_t)total;
 }
 
-
-int receive_data(int client_fd, char *buffer, size_t buffer_size)
+ssize_t network_recv(int fd, char *buf, size_t len)
 {
-    if (buffer == NULL || buffer_size == 0) {
+    if (fd < 0 || buf == NULL || len == 0) {
         return -1;
     }
 
-    ssize_t bytes_received = recv(
-        client_fd,
-        buffer,
-        buffer_size - 1,
-        0
-    );
+    ssize_t n;
+    do {
+        n = recv(fd, buf, len, 0);
+    } while (n < 0 && errno == EINTR);
 
-    if (bytes_received < 0) {
-        perror("receive failed");
+    if (n < 0) {
+        perror("recv failed");
         return -1;
     }
-
-    if (bytes_received == 0) {
-        // Connection closed by the other side
-        return 0;
-    }
-
-    buffer[bytes_received] = '\0';
-
-    return (int)bytes_received;
+    return n;
 }
 
-
-// =========================
-// Close connection
-// =========================
-
-int network_close(int fd)
+void network_close(int fd)
 {
-    if (close(fd) < 0) {
-        perror("close failed");
-        return -1;
+    if (fd >= 0) {
+        close(fd);
     }
-
-    return 0;
 }

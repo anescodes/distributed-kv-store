@@ -1,40 +1,27 @@
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
 #include "network.h"
+#include "client.h"
 
-#define SERVER_IP "127.0.0.1"
-#define PORT 8080
-
-int main(void)
+int connect_to_server(const char *server_ip, int port)
 {
-    // Connect to server
-    int client_fd = connect_to_server(SERVER_IP, PORT);
-
-    if (client_fd < 0) {
-        return EXIT_FAILURE;
+    int fd = network_connect(server_ip, port);
+    if (fd >= 0) {
+        printf("[Client Module] Connected to server at %s:%d\n", server_ip, port);
     }
+    return fd;
+}
 
-    // Message to send
-    const char *message = "Hello from client!";
+ssize_t send_data(int client_fd, const char *data, size_t data_len)
+{
+    return network_send(client_fd, data, data_len);
+}
 
-    // Send message
-    int bytes_sent = send_data(
-        client_fd,
-        message,
-        strlen(message)
-    );
+ssize_t client_receive_data(int client_fd, char *buf, size_t len)
+{
+    return network_recv(client_fd, buf, len);
+}
 
-    if (bytes_sent < 0) {
-        network_close(client_fd);
-        return EXIT_FAILURE;
-    }
-
-    printf("Sent: %s\n", message);
-
-    // Close connection
+void client_disconnect(int client_fd)
+{
     network_close(client_fd);
-
-    return EXIT_SUCCESS;
 }
